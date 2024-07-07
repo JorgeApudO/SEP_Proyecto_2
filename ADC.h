@@ -5,7 +5,6 @@
 #include "xil_printf.h"
 #include "xparameters.h"	/* XPAR parameters */
 #include "xspi.h"
-#include "sleep.h"
 #define SPI_DEVICE_ID_1		XPAR_AXI_QUAD_SPI_1_DEVICE_ID
 #define BUFFER_SIZE_ADC		2
 
