@@ -1,16 +1,40 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
-//#include "LCD_Driver.h"
+#include "LCD_Driver.h"
 
 #define SIZE 64
+
+typedef struct Node {
+	uint16_t x;
+	uint16_t y;
+	COLOR color;
+	struct Node *next;
+} Node;
 
 enum Condition {
 	Alive = 1,
 	Dead = 0
 };
 
+enum Condition GRID_PREV[SIZE][SIZE] = {Dead};
 enum Condition GRID[SIZE][SIZE] = {Dead};
+Node *HEAD = NULL;
+
+Node *createNode(uint16_t x, uint16_t y, COLOR color) {
+	Node *new = malloc(sizeof(Node));
+	new->x = x;
+	new->y = y;
+	new->color = color;
+	return new;
+}
+
+void append_node(Node **head, uint16_t x, uint16_t y, COLOR color) {
+	Node *new = createNode(x, y, color);
+	new->next = *head;
+	*head = new;
+}
 
 void set_initial_conditions(enum Condition *new_state[SIZE]) {
 	memcpy(GRID, new_state, SIZE*SIZE);
@@ -22,6 +46,7 @@ void reset_grid() {
 
 void update_game_state() {
 	xil_printf("Started cycle\r\n");
+	memcpy(GRID_PREV, GRID, SIZE*SIZE);
 	enum Condition future[SIZE][SIZE] = {Dead};
 
 	// Iterar por todas las celdas
@@ -43,13 +68,22 @@ void update_game_state() {
 
 			// Reglas de Game of Life
 			// Si la celda esta sola, muere
-			if ((GRID[i][j] == Alive) && (alive_neighbours < 2)) future[i][j] = Dead;
+			if ((GRID[i][j] == Alive) && (alive_neighbours < 2)) {
+				future[i][j] = Dead;
+//				append_node(&HEAD, j, i, 0x0000);
+			}
 
 			// La celda muere por sobrepoblacion
-			else if ((GRID[i][j] == Alive) && (alive_neighbours > 3)) future [i][j] = Dead;
+			else if ((GRID[i][j] == Alive) && (alive_neighbours > 3)) {
+				future [i][j] = Dead;
+//				append_node(&HEAD, j, i, 0x0000);
+			}
 
 			// La celda nace
-			else if ((GRID[i][j] == Dead) && (alive_neighbours == 3)) future[i][j] = Alive;
+			else if ((GRID[i][j] == Dead) && (alive_neighbours == 3)) {
+				future[i][j] = Alive;
+//				append_node(&HEAD, j, i, 0xFFFF);
+			}
 
 			// El resto deja la celda igual
 			else future[i][j] = GRID[i][j];
@@ -68,12 +102,31 @@ void print_game_state() {
 				LCD_SetPointlColor(2*j + 1, 2*i, 0xFFFF);
 				LCD_SetPointlColor(2*j, 2*i + 1, 0xFFFF);
 				LCD_SetPointlColor(2*j + 1, 2*i + 1, 0xFFFF);
-			}
-			else {
+			} else {
 				LCD_SetPointlColor(2*j, 2*i, 0x0000);
 				LCD_SetPointlColor(2*j + 1, 2*i, 0x0000);
 				LCD_SetPointlColor(2*j, 2*i + 1, 0x0000);
 				LCD_SetPointlColor(2*j + 1, 2*i + 1, 0x0000);
+			}
+		}
+	}
+}
+
+void print_game_state_2() {
+	for (int i = 0; i < SIZE; i++) {
+		for (int j = 0; j < SIZE; j++) {
+			if (GRID[i][j] != GRID_PREV[i][j]) {
+				if (GRID[i][j] == Alive) {
+					LCD_SetPointlColor(2*j, 2*i, 0xFFFF);
+					LCD_SetPointlColor(2*j + 1, 2*i, 0xFFFF);
+					LCD_SetPointlColor(2*j, 2*i + 1, 0xFFFF);
+					LCD_SetPointlColor(2*j + 1, 2*i + 1, 0xFFFF);
+				} else {
+					LCD_SetPointlColor(2*j, 2*i, 0x0000);
+					LCD_SetPointlColor(2*j + 1, 2*i, 0x0000);
+					LCD_SetPointlColor(2*j, 2*i + 1, 0x0000);
+					LCD_SetPointlColor(2*j + 1, 2*i + 1, 0x0000);
+				}
 			}
 		}
 	}

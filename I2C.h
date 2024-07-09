@@ -12,5 +12,7 @@
 int init_IIC();
 int read_tmp();
 int read_opt();
+void setup_opt();
+void reset_opt();
 
 #endif

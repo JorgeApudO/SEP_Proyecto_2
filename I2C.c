@@ -18,20 +18,17 @@ int init_IIC() {
 	    XIic_Start(&iic);
 
 
-		SendBuffer[0] = 0xfe;
-		XIic_Send(iic.BaseAddress,TMP_ADDR,(u8 *)&SendBuffer, 1,XIIC_REPEATED_START);
-		XIic_Recv(iic.BaseAddress,TMP_ADDR,(u8 *)&RecvBuffer, 2,XIIC_STOP);
-
-
-		SendBuffer[0] = 0x02;
-		XIic_Send(iic.BaseAddress,TMP_ADDR,(u8 *)&SendBuffer, 1,XIIC_STOP);
-
-		SendBuffer[0] = 0x80;
-		XIic_Send(iic.BaseAddress,TMP_ADDR,(u8 *)&SendBuffer, 1,XIIC_REPEATED_START);
-		SendBuffer[0] = 0x82;
-		XIic_Send(iic.BaseAddress,TMP_ADDR,(u8 *)&SendBuffer, 1,XIIC_REPEATED_START);
-
-
+//		SendBuffer[0] = 0xfe;
+//		XIic_Send(iic.BaseAddress,TMP_ADDR,(u8 *)&SendBuffer, 1,XIIC_REPEATED_START);
+//		XIic_Recv(iic.BaseAddress,TMP_ADDR,(u8 *)&RecvBuffer, 2,XIIC_STOP);
+//
+//		SendBuffer[0] = 0x02;
+//		XIic_Send(iic.BaseAddress,TMP_ADDR,(u8 *)&SendBuffer, 1,XIIC_STOP);
+//
+//		SendBuffer[0] = 0x80;
+//		XIic_Send(iic.BaseAddress,TMP_ADDR,(u8 *)&SendBuffer, 1,XIIC_REPEATED_START);
+//		SendBuffer[0] = 0x82;
+//		XIic_Send(iic.BaseAddress,TMP_ADDR,(u8 *)&SendBuffer, 1,XIIC_REPEATED_START);
 
     return XST_SUCCESS;
 }
@@ -54,4 +51,44 @@ int read_opt(){
 	Lux = (int)((RecvBuffer[0])*256 + (RecvBuffer[1]));
 
 	return Lux;
+}
+
+void setup_opt() {
+	u8 config[3] = {0x01, 0xc4, 0x18};
+	XIic_Send(iic.BaseAddress, OPT_ADDR, (u8 *)&config, 3, XIIC_STOP);
+
+	// Configurar limite superior
+//	u8 config[3] = {0x03, 0x48, 0x9A};
+//	XIic_Send(iic.BaseAddress, OPT_ADDR, (u8 *)&config, 3, XIIC_STOP);
+
+	// Configurar limite inferior
+	u8 config1[3] = {0x02, 0x07, 0xD0};
+	XIic_Send(iic.BaseAddress, OPT_ADDR, (u8 *)&config1, 3, XIIC_STOP);
+
+	u8 buf[1];
+	buf[0] = 0x01;
+	XIic_Send(iic.BaseAddress,OPT_ADDR,(u8 *)&buf, 1, XIIC_REPEATED_START);
+	XIic_Recv(iic.BaseAddress,OPT_ADDR,(u8 *)&RecvBuffer, 2, XIIC_STOP);
+
+	buf[0] = 0x02;
+	XIic_Send(iic.BaseAddress,OPT_ADDR,(u8 *)&buf, 1, XIIC_REPEATED_START);
+	XIic_Recv(iic.BaseAddress,OPT_ADDR,(u8 *)&RecvBuffer, 2, XIIC_STOP);
+
+//	buf[0] = 0x03;
+//	XIic_Send(iic.BaseAddress,OPT_ADDR,(u8 *)&buf, 1, XIIC_REPEATED_START);
+//	XIic_Recv(iic.BaseAddress,OPT_ADDR,(u8 *)&RecvBuffer, 2, XIIC_STOP);
+}
+
+void reset_opt() {
+	u8 buf[1] = {0x01};
+	XIic_Send(iic.BaseAddress,OPT_ADDR,(u8 *)&buf, 1, XIIC_REPEATED_START);
+	XIic_Recv(iic.BaseAddress,OPT_ADDR,(u8 *)&RecvBuffer, 2, XIIC_STOP);
+
+	// Configurar limite superior
+//	u8 config[3] = {0x03, 0x48, 0x9A};
+//	XIic_Send(iic.BaseAddress, OPT_ADDR, (u8 *)&config, 3, XIIC_STOP);
+
+	// Configurar limite inferior
+	u8 config[3] = {0x02, 0x07, 0xD0};
+	XIic_Send(iic.BaseAddress, OPT_ADDR, (u8 *)&config, 3, XIIC_STOP);
 }

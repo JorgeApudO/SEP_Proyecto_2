@@ -1,16 +1,17 @@
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #include "platform.h"
 //#include "xil_printf.h"
 #include "xparameters.h"
 #include "xgpio.h"
 #include "xstatus.h"
-////#include "Delay.h"
+#include "Delay.h"
 //#include "LCD_SPI.h"
 #include "LCD_GUI.h"
 #include "ADC.h"
-//#include "I2C.h"
+#include "I2C.h"
 #include "xtmrctr.h"
 #include "game_of_life.h"
 #include "xscugic.h"
@@ -20,27 +21,51 @@
 #define INTC_DEVICE_ID XPAR_PS7_SCUGIC_0_DEVICE_ID
 #define TMR_DEVICE_ID0 XPAR_TMRCTR_0_DEVICE_ID
 #define INTC_TMR_INTERRUPT_ID_0 XPAR_FABRIC_AXI_TIMER_0_INTERRUPT_INTR
-//#define TMR_DEVICE_ID1 XPAR_TMRCTR_1_DEVICE_ID
+#define TMR_DEVICE_ID1 XPAR_TMRCTR_1_DEVICE_ID
+#define INTC_TMR_INTERRUPT_ID_1 XPAR_FABRIC_AXI_TIMER_1_INTERRUPT_INTR
+
+#define LIGHT_INT 61U
+
+#define ADDR_CANCION XPAR_NEW_CANCION_0_S00_AXI_BASEADDR
+#define ADDR_BUZZER XPAR_NEW_BUZZER_0_S00_AXI_BASEADDR
+
+const u32 notas[12] = {
+		261,
+		294,
+		294,
+		440,
+		330,
+		349,
+		523,
+		392,
+		587,
+		659,
+		698,
+		494
+};
 
 // Variables
+int ITERATIONS = 0;
+
 XScuGic INTCInst;
 
 XTmrCtr TMRInst0;
-uint32_t TMR_LOAD0 = 0xF8000000; // 1 seg?
+uint32_t TMR_LOAD0 = 0xFF67697F; // ~100ms
 
 XTmrCtr TMRInst1;
+uint32_t TMR_LOAD1 = 0xFFE17B7F; // ~20ms
 
 extern XGpio gpio0;
 XGpio gpio1;
 extern XSpi SpiInstance;
 extern XSpi SpiInstance1;
 
-uint16_t pot_x = 0;
-uint16_t pot_y = 0;
+uint16_t pot_x;
+uint16_t pot_y;
 uint16_t prev_x = 0;
 uint16_t prev_y = 0;
 
-int acy = 0;
+int acy;
 int mic;
 
 int btn1;
@@ -58,16 +83,22 @@ enum ProgramState {
 enum ProgramState GameState = Menu;
 
 // Functions primitives
-int printMenuGui();
-int printEditGui();
-int printSimGui();
+void printMenuGui();
+void printEditGui();
+void printSimGui();
 void printGOGui();
+void printPauseGui();
+
+void cargar_cancion(u32 *secuencia);
+void buzzer_start();
+void buzzer_stop();
 
 static int InterruptSystemSetup(XScuGic *XScuGicInstancePtr);
-static int IntcInitFunction(u16 DeviceId, XTmrCtr *TmrInstancePtr);
-void TMR_Intr_Handler_0_backup();
+static int IntcInitFunction(u16 DeviceId, XTmrCtr *TmrInstancePtr, XTmrCtr *TmrInstancePtr1);
 
 void TMR_Intr_Handler_0(void *data);
+void TMR_Intr_Handler_1(void *data);
+void OPT_Intr_Handler(void *data);
 
 int main()
 {
@@ -114,14 +145,30 @@ int main()
 	XTmrCtr_SetResetValue(&TMRInst0, 0, TMR_LOAD0);
 	XTmrCtr_SetOptions(&TMRInst0, 0, XTC_INT_MODE_OPTION | XTC_AUTO_RELOAD_OPTION);
 
+	// Initialize Timer 1
+	Status = XTmrCtr_Initialize(&TMRInst1, TMR_DEVICE_ID1);
+	if (Status != XST_SUCCESS) {
+		xil_printf("Timer 1 Initialization failed\r\n");
+		return XST_FAILURE;
+	}
+	XTmrCtr_SetHandler(&TMRInst1, (XTmrCtr_Handler) TMR_Intr_Handler_1, &TMRInst1);
+	XTmrCtr_SetResetValue(&TMRInst1, 0, TMR_LOAD1);
+	XTmrCtr_SetOptions(&TMRInst1, 0, XTC_INT_MODE_OPTION | XTC_AUTO_RELOAD_OPTION);
+
+	// Setup IIC
+	Status = init_IIC();
+	if (Status != XST_SUCCESS) {
+		xil_printf("IIC initialization failed\r\n");
+		return XST_FAILURE;
+	}
+	setup_opt();
+
 	// Initialize Interrupt Controller
-	Status = IntcInitFunction(INTC_DEVICE_ID, &TMRInst0);
+	Status = IntcInitFunction(INTC_DEVICE_ID, &TMRInst0, &TMRInst1);
 	if (Status != XST_SUCCESS) {
 		xil_printf("Interrupt controller initialization failed\r\n");
 		return XST_FAILURE;
 	}
-
-	XTmrCtr_Start(&TMRInst0, 0);
 
 	xil_printf("**********Init LCD**********\r\n");
 	LCD_SCAN_DIR LCD_ScanDir = SCAN_DIR_DFT;//SCAN_DIR_DFT = D2U_L2R
@@ -130,33 +177,50 @@ int main()
 	xil_printf("LCD Show \r\n");
 	LCD_Clear(GUI_BACKGROUND);
 
+	GUI_DisString_EN(20, 30, "Ingrese", &Font16, GUI_BACKGROUND, WHITE);
+	GUI_DisString_EN(20, 45, "Cancion", &Font16, GUI_BACKGROUND, WHITE);
+
 	char buf[64];
-	xil_printf("Ingresa algun texto: ");
+	uint32_t orden_notas[3];
+	xil_printf("Ingrese la secuencia de notas: ");
 	scanf("%s", buf);
-	if (strcmp(buf, "hola") == 0) {
-		xil_printf("\r\nTexto ingresado: %s\r\n", buf);
-	}
+
+	char hex[30];
+	strncpy (hex, buf, 8);
+	hex[8] = '\0';   /* null character manually added */
+	orden_notas[0] = (uint32_t) strtoull(hex, NULL, 16);
+	xil_printf("\r\n%lu\r\n", orden_notas[0]);
+
+	strncpy (hex, buf + 8, 8);
+	hex[8] = '\0';   /* null character manually added */
+	orden_notas[1] = (uint32_t) strtoull(hex, NULL, 16);
+	xil_printf("%lu\r\n", orden_notas[1]);
+
+	strncpy (hex, buf + 16, 8);
+	hex[8] = '\0';   /* null character manually added */
+	orden_notas[2] = (uint32_t) strtoull(hex, NULL, 16);
+	xil_printf("%lu\r\n", orden_notas[2]);
+
+	cargar_cancion(orden_notas);
+
+	LCD_Clear(GUI_BACKGROUND);
+
+	XTmrCtr_Start(&TMRInst0, 0);
+	XTmrCtr_Start(&TMRInst1, 0);
 
 	while (1) {
-		pot_x = read_POT1();
-		pot_y = read_POT2();
-		acy = read_acy();
-		mic = read_MIC();
-
-		btn1 = XGpio_DiscreteRead(&gpio1, 1) & 0x1;
-		btn2 = XGpio_DiscreteRead(&gpio1, 1) & 0x2;
-
-		TMR_Intr_Handler_0_backup();
-
 		switch (GameState) {
 		case Menu:
 			if (mic > 1000) {
 				LCD_Clear(GUI_BACKGROUND);
 				GameState = Edit;
+			} else {
+				printMenuGui();
 			}
 			break;
 
 		case Edit:
+			printEditGui();
 			if (acy < 350) {
 				reset_grid();
 				LCD_Clear(GUI_BACKGROUND);
@@ -169,61 +233,47 @@ int main()
 			break;
 
 		case Simulation:
+			printSimGui();
 			if (btn1 == 0) {
 				update_game_state();
+				ITERATIONS++;
 
 				if (check_empty_grid()) {
 					LCD_Clear(GUI_BACKGROUND);
+
 					GameState = GameOver;
 				}
 			}
+			millisleep(100);
 			break;
 
 		case GameOver:
+			printGOGui();
+			buzzer_start();
+			millisleep(5000);
+			buzzer_stop();
+			LCD_Clear(GUI_BACKGROUND);
+			GameState = Menu;
+			break;
+
+		case Pause:
+			printPauseGui();
+			if (btn2 == 0) {
+				print_game_state();
+				GameState = Simulation;
+			}
 			break;
 		}
 	}
 }
 
-void TMR_Intr_Handler_0_backup() {
-	switch (GameState) {
-		case Menu:
-			if (printMenuGui() == 1) {
-				GameState = Edit;
-			}
-			break;
-
-		case Edit:
-			if (printEditGui() == 1) {
-				GameState = Simulation;
-			}
-			break;
-
-		case Simulation:
-			if (printSimGui() == 1) {
-				GameState = GameOver;
-			}
-			break;
-
-		case Pause:
-//			printPauseGui();
-			break;
-
-		case GameOver:
-			printGOGui();
-			break;
-	}
-}
-
-int printMenuGui() {
+void printMenuGui() {
 	GUI_DisString_EN(40, 30, "Game", &Font16, GUI_BACKGROUND, WHITE);
 	GUI_DisString_EN(50, 45, "of", &Font16, GUI_BACKGROUND, WHITE);
 	GUI_DisString_EN(40, 60, "Life", &Font16, GUI_BACKGROUND, WHITE);
-
-	return 0;
 }
 
-int printEditGui() {
+void printEditGui() {
 	uint16_t pos_x = 64 - (uint16_t)((double)pot_x / 15.5);
 	uint16_t pos_y = 64 - (uint16_t)((double)pot_y / 15.5);
 
@@ -247,14 +297,10 @@ int printEditGui() {
 
 	prev_x = pos_x;
 	prev_y = pos_y;
-
-	return 0;
 };
 
-int printSimGui() {
-	print_game_state();
-
-	return 0;
+void printSimGui() {
+	print_game_state_2();
 }
 
 void printGOGui() {
@@ -262,13 +308,39 @@ void printGOGui() {
 	GUI_DisString_EN(40, 65, "OVER", &Font16, GUI_BACKGROUND, WHITE);
 }
 
+void printPauseGui() {
+	GUI_DisString_EN(35, 55, "PAUSA", &Font16, GUI_BACKGROUND, WHITE);
+}
+
 void TMR_Intr_Handler_0(void *data) {
 	if (XTmrCtr_IsExpired(&TMRInst0, 0)) {
 		XTmrCtr_Stop(&TMRInst0, 0);
-		xil_printf("Timer expired\r\n");
+
+		btn1 = XGpio_DiscreteRead(&gpio1, 1) & 0x1;
+		btn2 = XGpio_DiscreteRead(&gpio1, 1) & 0x2;
+
 		XTmrCtr_Reset(&TMRInst0, 0);
 		XTmrCtr_Start(&TMRInst0, 0);
 	}
+}
+
+void TMR_Intr_Handler_1(void *data) {
+	if (XTmrCtr_IsExpired(&TMRInst1, 0)) {
+		XTmrCtr_Stop(&TMRInst1, 0);
+
+		pot_x = read_POT1();
+		pot_y = read_POT2();
+		acy = read_acy();
+		mic = read_MIC();
+
+		XTmrCtr_Reset(&TMRInst1, 0);
+		XTmrCtr_Start(&TMRInst1, 0);
+	}
+}
+
+void OPT_Intr_Handler(void *data) {
+	GameState = Pause;
+	reset_opt();
 }
 
 // Interrupt functions
@@ -283,7 +355,7 @@ static int InterruptSystemSetup(XScuGic *XScuGicInstancePtr) {
 
 	return XST_SUCCESS;
 }
-static int IntcInitFunction(u16 DeviceId, XTmrCtr *TmrInstancePtr) {
+static int IntcInitFunction(u16 DeviceId, XTmrCtr *TmrInstancePtr, XTmrCtr *TmrInstancePtr1) {
 	XScuGic_Config *IntcConfig;
 	int status;
 
@@ -304,6 +376,8 @@ static int IntcInitFunction(u16 DeviceId, XTmrCtr *TmrInstancePtr) {
 
 	// Asignacion de prioridades
 	XScuGic_SetPriorityTriggerType(&INTCInst, INTC_TMR_INTERRUPT_ID_0, 0x18, 0x1);
+	XScuGic_SetPriorityTriggerType(&INTCInst, INTC_TMR_INTERRUPT_ID_1, 0x20, 0x1);
+	XScuGic_SetPriorityTriggerType(&INTCInst, LIGHT_INT, 0x22, 0x1);
 
 	// Connect timer 0 interrupt to handler
 	status = XScuGic_Connect(&INTCInst,
@@ -315,9 +389,49 @@ static int IntcInitFunction(u16 DeviceId, XTmrCtr *TmrInstancePtr) {
 		return XST_FAILURE;
 	}
 
+	status = XScuGic_Connect(&INTCInst,
+				INTC_TMR_INTERRUPT_ID_1,
+				(Xil_ExceptionHandler) TMR_Intr_Handler_1,
+				(void *) TmrInstancePtr1);
+	if (status != XST_SUCCESS) {
+		xil_printf("timer 1 setup failed\r\n");
+		return XST_FAILURE;
+	}
+
+	status = XScuGic_Connect(&INTCInst,
+				LIGHT_INT,
+				(Xil_ExceptionHandler) OPT_Intr_Handler,
+				(void *) 0);
+	if (status != XST_SUCCESS) {
+		xil_printf("light sensor setup failed\r\n");
+		return XST_FAILURE;
+	}
+
 	// Enable timer interrupts in the controller
 	XScuGic_Enable(&INTCInst, INTC_TMR_INTERRUPT_ID_0);
+	XScuGic_Enable(&INTCInst, INTC_TMR_INTERRUPT_ID_1);
+	XScuGic_Enable(&INTCInst, LIGHT_INT);
 
 	return XST_SUCCESS;
 }
 
+// Buzzer
+void cargar_cancion(u32 *secuencia) {
+	for (int i = 0; i < 12; i++) {
+		Xil_Out32(ADDR_CANCION + i*4, (u32)100000000/notas[i]);
+	}
+
+	for (int i = 0; i < 3; i++) {
+		Xil_Out32(ADDR_CANCION + 12*4 + i*4, secuencia[i]);
+	}
+
+	Xil_Out32(ADDR_BUZZER + 4, 1); // Ciclo de trabajo 50%
+}
+
+void buzzer_start() {
+	Xil_Out32(ADDR_CANCION + 15*4, 0xFFFFFFFF);
+}
+
+void buzzer_stop() {
+	Xil_Out32(ADDR_CANCION + 15*4, 0);
+}
